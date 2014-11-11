@@ -10,6 +10,7 @@
 
 using namespace std;
 
+int process_count = 0;
 
 int test = 1;
 #define DIM 3
@@ -48,6 +49,8 @@ typedef REAL REAL_33[3][3];
 
 struct VoxelDataStruc
 {
+	int count;
+	int connectivityFlag_backup;
 	int connectivityFlag;   //  false -- isolated,  true -- connected
 	// -1 ---  untouched  0 -- unprocessed,  1 -- processed   2 -- true data  3 -- outlier 
 	float maxError;
@@ -69,6 +72,7 @@ static REAL maxarg2;
 	(maxarg2) : (maxarg1))
 
 // declare
+REAL angle_vect(REAL_DIM a, REAL_DIM b);
 void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen);
 void calcCentroid(int num_nlist, INT32 *nlist, REAL_DIM* vert_v, REAL centroid[]);
 void tellTrueFalse(int num_nlist, INT32 *nlist, REAL_DIM* vert_v, bool* istatus);
@@ -402,6 +406,7 @@ int main()
 			{
 				for (k = 0; k<m; k++)
 				{
+					vds[i][j][k].count = count[i][j][k]; //  count
 					if (vds[i][j][k].connectivityFlag == false)
 					{
 
@@ -462,12 +467,9 @@ int main()
 			for (k = 0; k<m; k++)
 			{
 				itmp = count[i][j][k];
-				if ((itmp > ithreshold   // any ithreshold > 2 becomes disruptive
+				if (vds[i][j][k].connectivityFlag == true
+					&& itmp > 0)// connectivity check is really useful to skip very smooth portions, and catch noisy part.
 
-					//  connectivity check is really useful to skip very smooth portions, and catch noisy part.
-					||
-					vds[i][j][k].connectivityFlag == true)
-					&& itmp != 0)// itmp > 1
 				{
 					int* localIdx = new int[itmp];
 					for (l = 0; l < itmp; l++)
@@ -674,18 +676,31 @@ int main()
 	{
 		// Bi-means clustering
 		double vmax = -BIG, vmin = BIG;
-		int num_point = 0;
+//		int num_point = 0;
 		for (i = 0; i<curvert; i++)
 		{
 			if (istatus[i] == true)
 			{
 				if (GmaxerrorArray[i]> vmax) vmax = GmaxerrorArray[i];
 				if (GmaxerrorArray[i] < vmin) vmin = GmaxerrorArray[i];
-				num_point++;
+//				num_point++;
 			}
 		}
 
 		double vsize = vmax - vmin;
+
+		// back up connectivityFlag
+		for (i = 0; i < m; i++)
+		{
+			for (j = 0; j < m; j++)
+			{
+				for (k = 0; k < m; k++)
+				{
+					vds[i][j][k].connectivityFlag_backup = vds[i][j][k].connectivityFlag;
+				}
+			}
+		}
+
 
 		// *** Voxel propagation  ***
 		// Initialization
@@ -698,7 +713,7 @@ int main()
 				{
 					itmp = count[i][j][k];
 
-					if (itmp <= ithreshold && vds[i][j][k].connectivityFlag == false)
+					if (itmp == 0 || vds[i][j][k].connectivityFlag == false)
 					{
 						vds[i][j][k].hlevel = HISTOGNUM;  // for propagation purpose
 					}
@@ -722,8 +737,10 @@ int main()
 
 
 		// Propagation
+		int count_untouched = 0;
 
-		i2 = HISTOGNUM / 2;
+		i2 = 1;
+		//i2 = HISTOGNUM-1;
 		int break_flag = false;
 
 		for (l = 0; l<i2; l++)
@@ -739,7 +756,12 @@ int main()
 							if (vds[i][j][k].connectivityFlag == -1) // untouched
 							{
 								propagateVoxel(i, j, k, vds, m);
-								break_flag = true;
+								/*itmp = count[i][j][k];
+								for (l = 0; l < itmp; l++)
+								{
+									id = list[i][j][k][l];
+								}*/
+								break_flag = true; // single initial point
 							}
 						}
 						if (break_flag) break;
@@ -750,7 +772,9 @@ int main()
 			}
 			if (break_flag) break;
 		}
-
+		cout << "propogation process count: ";
+		cout << process_count << endl;
+		
 		for (i = 0; i<m; i++)
 		{
 			for (j = 0; j<m; j++)
@@ -758,7 +782,8 @@ int main()
 				for (k = 0; k<m; k++)
 				{
 					itmp = count[i][j][k];
-					if (vds[i][j][k].connectivityFlag == 3) // outlier
+					if (vds[i][j][k].connectivityFlag == 3 \
+						|| vds[i][j][k].connectivityFlag == -1) // outlier
 					{
 						for (l = 0; l<itmp; l++)
 						{
@@ -766,6 +791,7 @@ int main()
 							tmpoup2 << vert_v[id][0] << " " << vert_v[id][1] << " " << vert_v[id][2] << endl;
 						}
 					}
+
 					else  // true data + untouched
 					{
 						for (l = 0; l<itmp; l++)
@@ -777,8 +803,10 @@ int main()
 				}
 			}
 		}
-	}
+		cout << "count_untouched: ";
+		cout << count_untouched << endl;
 
+	}
 	tmpoup1.close();
 	tmpoup2.close();
 	t_end = time(NULL);
@@ -2042,13 +2070,14 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen)
 	bool flag2 = false;
 	CoordDataStruc nid;
 	nid.i = i0, nid.j = j0, nid.k = k0;
-	int i1, j1, k1, i2, j2, k2;
-	float A, B, C, D, d, scale = 0.83*min_cubesize;
-	float cos_angle;
-	float cos_scale = 0.003; // 78 degree
+	int i1, j1, k1, i2, j2, k2, l;
+	float A, B, C, D, d, scale = 1.0*min_cubesize; // best for this case
+	REAL tmp, angle_t = 0.05*M_PI; // 9 degree, best for this case
+	//REAL angle_t2 = 0.75*M_PI;
 
 	num_wave_front = 1;
 	wave_front[0] = nid;
+	REAL_DIM v1, v2;
 
 	do
 	{
@@ -2066,14 +2095,16 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen)
 				// centroid is shifted to the lower left corner
 				
 				// distance-based
-				//A = vds[i1][j1][k1].n[0], B = vds[i1][j1][k1].n[1], C = vds[i1][j1][k1].n[2];
-				//D = -(A*i1 + B*j1 + C*k1);
-				//D = -(A*vds[i1][j1][k1].centroid[0] + B*vds[i1][j1][k1].centroid[1] + C*vds[i1][j1][k1].centroid[2]);
+				A = vds[i1][j1][k1].n[0], B = vds[i1][j1][k1].n[1], C = vds[i1][j1][k1].n[2];
+				D = -(A*vds[i1][j1][k1].centroid[0] + B*vds[i1][j1][k1].centroid[1] + C*vds[i1][j1][k1].centroid[2]);
+				for (l = 0; l<DIM; l++)
+					v1[l] = vds[i1][j1][k1].n[l];
 
 				for (i = -1; i <= 1; i++)
 				for (j = -1; j <= 1; j++)
 				for (k = -1; k <= 1; k++)
 				{
+
 					i2 = i1 + i, j2 = j1 + j, k2 = k1 + k;  // x1, y1, z1
 
 					if (i == 0 && j == 0 && k == 0)
@@ -2082,22 +2113,36 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen)
 						continue;
 					if (i2>cubelen - 1 || j2>cubelen - 1 || k2>cubelen - 1)
 						continue;
+//					if (abs(i) + abs(j) + abs(k) != 1)
+//						continue;
+					
+					// no difference
+					
+					if (vds[i2][j2][k2].count == 0)
+					{
+						vds[i2][j2][k2].connectivityFlag = 3; // outlier
+						continue;
+					}
+					
 
 					// distance-based
 					// distance from (x1, y1, z1) to the plane (A,B,C,D)
-					//d = fabs(A*i2 + B*j2 + C*k2 + D) / sqrt(A*A + B*B + C*C);
-//					d = fabs(A*vds[i2][j2][k2].centroid[0] + B*vds[i2][j2][k2].centroid[1] + C*vds[i2][j2][k2].centroid[2] + D) / sqrt(A*A + B*B + C*C);
+					d = fabs(A*vds[i2][j2][k2].centroid[0] + B*vds[i2][j2][k2].centroid[1] + C*vds[i2][j2][k2].centroid[2] + D) / sqrt(A*A + B*B + C*C);
+
+//					for (int l = 0; l<DIM; l++)
+//						v2[l] = vds[i2][j2][k2].centroid[l] - vds[i1][j1][k1].centroid[l];
+					for (l = 0; l<DIM; l++)
+						v2[l] = vds[i2][j2][k2].n[l];
 
 
 					// anlge-based
-					cos_angle = abs((vds[i1][j1][k1].n[0] * vds[i2][j2][k2].n[0] + vds[i1][j1][k1].n[1] * vds[i2][j2][k2].n[1] + vds[i1][j1][k1].n[2] * vds[i2][j2][k2].n[2]) / \
-						((vds[i1][j1][k1].n[0] * vds[i1][j1][k1].n[0] + vds[i1][j1][k1].n[1] * vds[i1][j1][k1].n[1] + vds[i1][j1][k1].n[2] * vds[i1][j1][k1].n[2])*\
-						(vds[i2][j2][k2].n[0] * vds[i2][j2][k2].n[0] + vds[i2][j2][k2].n[1] * vds[i2][j2][k2].n[1] + vds[i2][j2][k2].n[2] * vds[i2][j2][k2].n[2])));
+					tmp = angle_vect(v1, v2);
+
 					
-					
-					if (cos_angle > cos_scale && vds[i2][j2][k2].hlevel<HISTOGNUM) // in the propagation plane
-			//		if (d < scale && vds[i2][j2][k2].hlevel<HISTOGNUM) // in the propagation plane
-						// The purpose of the second condition is to get rid of cubes with no or very few points
+					//if (d < scale) // in the propagation plane
+					//if (tmp < angle_t)
+					if ((tmp < angle_t) || d < scale)
+					// The purpose of the second condition is to get rid of cubes with no or very few points
 					{
 						if (vds[i2][j2][k2].connectivityFlag == -1)  // untouched
 						{
@@ -2105,11 +2150,21 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen)
 							wave_front2[num_wave_front2++] = nid;
 							vds[i2][j2][k2].connectivityFlag = 0;  // unprocessed
 						}
+						else if (vds[i2][j2][k2].connectivityFlag == 0) // set in former loop
+						{
+							// do nothing
+						}
+						else if (vds[i2][j2][k2].connectivityFlag == 2)
+						{
+							// do nothing
+						}
+						else // treated as noise before
+							vds[i2][j2][k2].connectivityFlag = 2; // true data
 
 					}
 					else // outside the propagation plane
 					{
-						if (true)//if(vds[i2][j2][k2].connectivityFlag==-1)
+						if (vds[i2][j2][k2].connectivityFlag == -1)
 						{
 							vds[i2][j2][k2].connectivityFlag = 3; // outlier
 						}
@@ -2144,4 +2199,42 @@ void calcCentroid(int num_nlist, INT32 *nlist, REAL_DIM* vert_v, REAL centroid[]
 	for (k = 0; k<DIM; k++)
 		centroid[k] += vert_v[nlist[j]][k];
 	for (k = 0; k<DIM; k++) centroid[k] /= float(num_nlist);
+}
+
+REAL angle_vect(REAL_DIM a, REAL_DIM b)
+{
+	int i;
+	REAL cp = 0;
+	REAL d1 = 0;
+	REAL d2 = 0;
+	REAL tol = 1.0e-6;
+
+	for (i = 0; i < DIM; i++)
+	{
+		cp += a[i] * b[i];
+		d1 += a[i] * a[i];
+		d2 += b[i] * b[i];
+	}
+
+	//if (d1 == 0 || d2 == 0) 
+	if (d1 <= tol || d2 <= tol)
+	{
+#ifdef _DEBUG
+		cerr << "d1= " << d1 << " d2= " << d2 << endl;
+		cerr << "Identical nodes !" << endl;
+#endif
+		cp = 0;
+	}
+	else
+	{
+		cp /= sqrt(d1*d2);
+		if (fabs(cp - 1.0) < tol)
+			cp = 0.0;
+		else if (fabs(cp + 1.0) < tol)
+			cp = M_PI;
+		else
+			cp = acos(fabs(cp));
+	}
+
+	return cp;
 }
