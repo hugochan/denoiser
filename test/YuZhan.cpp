@@ -138,7 +138,9 @@ int main()
 	REAL_DIM *vert_v;
 
 	//add
-	char input_filename[50] = "NoiseModel1.asc";
+	//char input_filename[50] = "NoiseModel1.asc";
+	char input_filename[50] = "NoiseModel2.asc";
+
 	//
 
 	scr0.open(input_filename, ios::in);   // .asc file
@@ -283,8 +285,8 @@ int main()
 	//m = (int) pow(10, (1/3.0)*log10(double(curvert)));
 
 	//if(m > 200)  
-	m = 100;
-	//m = 50;
+	//m = 100;
+	m = 50;
 
 	for (j = 0; j < DIM; j++)
 	{
@@ -756,11 +758,11 @@ int main()
 							if (vds[i][j][k].connectivityFlag == -1) // untouched
 							{
 								propagateVoxel(i, j, k, vds, m);
-								/*itmp = count[i][j][k];
+								itmp = count[i][j][k];
 								for (l = 0; l < itmp; l++)
 								{
 									id = list[i][j][k][l];
-								}*/
+								}
 								break_flag = true; // single initial point
 							}
 						}
@@ -2071,9 +2073,14 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen)
 	CoordDataStruc nid;
 	nid.i = i0, nid.j = j0, nid.k = k0;
 	int i1, j1, k1, i2, j2, k2, l;
-	float A, B, C, D, d, scale = 1.0*min_cubesize; // best for this case
-	REAL tmp, angle_t = 0.05*M_PI; // 9 degree, best for this case
+	float A, B, C, D, d;
+	float scale = 0.5*min_cubesize; // best for this case
+	float tmp, angle_t = 0.01*M_PI; // 9 degree, best for this case
 	//REAL angle_t2 = 0.75*M_PI;
+	float dist_angl_ratio = 0.8;
+	float dist_angl;
+	//float dist_angl_threshold = 0.3;
+	float dist_angl_threshold = 0.2;
 
 	num_wave_front = 1;
 	wave_front[0] = nid;
@@ -2139,9 +2146,17 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen)
 					tmp = angle_vect(v1, v2);
 
 					
+
+					// linear combination of distance and angle
+					//dist_angl = (1 - dist_angl_ratio)*(tmp - angle_t) / (M_PI / 2) + \
+						//dist_angl_ratio*(d - scale) / min_cubesize;
+					dist_angl = -(1 - dist_angl_ratio)*(tmp - angle_t) / (M_PI / 2) + \
+						dist_angl_ratio*(d - scale) / min_cubesize;
+
 					//if (d < scale) // in the propagation plane
 					//if (tmp < angle_t)
-					if ((tmp < angle_t) || d < scale)
+					//if ((tmp < angle_t) || d < scale)
+					if (dist_angl < dist_angl_threshold)
 					// The purpose of the second condition is to get rid of cubes with no or very few points
 					{
 						if (vds[i2][j2][k2].connectivityFlag == -1)  // untouched
@@ -2233,7 +2248,7 @@ REAL angle_vect(REAL_DIM a, REAL_DIM b)
 		else if (fabs(cp + 1.0) < tol)
 			cp = M_PI;
 		else
-			cp = acos(fabs(cp));
+			cp = acos((cp));
 	}
 
 	return cp;
