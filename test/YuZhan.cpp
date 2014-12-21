@@ -15,6 +15,7 @@ int process_count = 0;
 int test = 1;
 #define UNPROCESSED (char)0
 #define PROCESSED (char)1
+#define TRUEDATA (char)2
 #define OUTLIERT (char)3
 #define DIM 3
 #define BIG  1000000000
@@ -1092,12 +1093,13 @@ int main()
 		for (i = 0; i < curvert2; i++)
 			nodeflag[i] = UNPROCESSED;
 
+
+		i2 = 1;
+		//i2 = HISTOGNUM/2;
 		if (palgorithm == 1)
 		{
 			int count_untouched = 0;
 
-			i2 = 1;
-			//i2 = HISTOGNUM-1;
 			int break_flag = false;
 
 			for (l = 0; l < i2; l++)
@@ -1200,7 +1202,9 @@ int main()
 			for (i = 0; i < curvert2; i++)
 			{
 
-				if (nodeflag[i] == OUTLIERT || nodeflag[i] == UNPROCESSED) // outlier (+ untouched)
+				if (nodeflag[i] == OUTLIERT
+					//|| nodeflag[i] == UNPROCESSED
+					) // outlier (+ untouched)
 				{
 					tmpoup2 << vert_v[i][0] << " " << vert_v[i][1] << " " << vert_v[i][2] << endl;
 
@@ -2582,7 +2586,7 @@ void propagateVoxelQuadratic(int i0, int j0, int k0, VoxelDataStruc ***vds,
 					}
 				}
 
-				if (num_nlist>6)
+				if (num_nlist >= 6)
 				{
 					//principalComponentAnalysis(num_nlist, nlist, centroid, D, V);
 					// find the centroid
@@ -2798,6 +2802,7 @@ void propagateVoxelQuadratic(int i0, int j0, int k0, VoxelDataStruc ***vds,
 							}
 						}
 					}
+
 					num_n = 0;
 					for (j = 0; j<num_nlist2; j++)
 					{
@@ -2826,6 +2831,10 @@ void propagateVoxelQuadratic(int i0, int j0, int k0, VoxelDataStruc ***vds,
 						tmp2 = fabs(tmp);
 						if (tmp2 > 2 * max_error)
 							nodeflag[id] = OUTLIERT;
+						else
+						{
+							nodeflag[id] = TRUEDATA;
+						}
 					}
 				}  // end of num_list < 8
 			}
