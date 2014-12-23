@@ -73,7 +73,7 @@ static REAL maxarg2;
 
 // declare
 REAL angle_vect(REAL_DIM a, REAL_DIM b);
-void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen);
+void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen, int **** list);
 void calcCentroid(int num_nlist, INT32 *nlist, REAL_DIM* vert_v, REAL centroid[]);
 void tellTrueFalse(int num_nlist, INT32 *nlist, REAL_DIM* vert_v, bool* istatus);
 void calcEigenVector(int num_nlist, INT32 *nlist, REAL_DIM vtmp2, REAL_DIM* vert_v);
@@ -741,11 +741,11 @@ int main()
 		// Propagation
 		int count_untouched = 0;
 
-		i2 = 1;
+		i2 = 2;
 		//i2 = HISTOGNUM-1;
 		int break_flag = false;
 
-		for (l = 0; l<i2; l++)
+		for (l = 1; l<i2; l++)
 		{
 			for (i = 0; i<m; i++)
 			{
@@ -757,7 +757,7 @@ int main()
 						{
 							if (vds[i][j][k].connectivityFlag == -1) // untouched
 							{
-								propagateVoxel(i, j, k, vds, m);
+								propagateVoxel(i, j, k, vds, m, list);
 								itmp = count[i][j][k];
 								for (l = 0; l < itmp; l++)
 								{
@@ -2056,7 +2056,7 @@ REAL NormalizeEigenValue(REAL_DIM vtmp2)
 }
 
 // circular propagation for noised data
-void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen)
+void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen, int **** list)
 {
 	INT16 num_nlist = 0, num_nlist2 = 0;
 	int i, j, nr = 30, id2, m;   // for noised model: nr=30; for non-noised model: nr=15
@@ -2074,13 +2074,13 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen)
 	nid.i = i0, nid.j = j0, nid.k = k0;
 	int i1, j1, k1, i2, j2, k2, l;
 	float A, B, C, D, d;
-	float scale = 0.5*min_cubesize; // best for this case
-	float tmp, angle_t = 0.01*M_PI; // 9 degree, best for this case
+	float scale = 1*min_cubesize; // best for this case
+	float tmp, angle_t = 0; //0.5*M_PI; // 9 degree, best for this case
 	//REAL angle_t2 = 0.75*M_PI;
-	float dist_angl_ratio = 0.8;
+	float dist_angl_ratio = 0.44;
 	float dist_angl;
 	//float dist_angl_threshold = 0.3;
-	float dist_angl_threshold = 0.2;
+	float dist_angl_threshold = 0;
 
 	num_wave_front = 1;
 	wave_front[0] = nid;
@@ -2124,7 +2124,21 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen)
 //						continue;
 					
 					// no difference
-					
+					int kk;
+					int aa, bb, cc;
+					for (kk = 0; kk < vds[i2][j2][k2].count; kk++)
+					{
+						if (list[i2][j2][k2][kk] == 14270)
+						{
+							aa = i2;
+							bb = j2;
+							cc = k2;
+						}
+					}
+
+
+
+
 					if (vds[i2][j2][k2].count == 0)
 					{
 						vds[i2][j2][k2].connectivityFlag = 3; // outlier
@@ -2144,13 +2158,18 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen)
 
 					// anlge-based
 					tmp = angle_vect(v1, v2);
-
-					
+					/*
+					if (tmp > M_PI / 2)
+					{
+						cout << tmp << endl;
+						cout<< list[i2][j2][k2][0] << endl;
+					}
+					*/
 
 					// linear combination of distance and angle
 					//dist_angl = (1 - dist_angl_ratio)*(tmp - angle_t) / (M_PI / 2) + \
 						//dist_angl_ratio*(d - scale) / min_cubesize;
-					dist_angl = -(1 - dist_angl_ratio)*(tmp - angle_t) / (M_PI / 2) + \
+					dist_angl = (1 - dist_angl_ratio)*(tmp - angle_t) / (M_PI/2) + \
 						dist_angl_ratio*(d - scale) / min_cubesize;
 
 					//if (d < scale) // in the propagation plane
@@ -2159,6 +2178,10 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen)
 					if (dist_angl < dist_angl_threshold)
 					// The purpose of the second condition is to get rid of cubes with no or very few points
 					{
+						if (i2 == aa && j2 == bb && k2 == cc)
+						{
+							aa = aa;
+						}
 						if (vds[i2][j2][k2].connectivityFlag == -1)  // untouched
 						{
 							nid.i = i2, nid.j = j2, nid.k = k2;
@@ -2174,7 +2197,10 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen)
 							// do nothing
 						}
 						else // treated as noise before
+						{
 							vds[i2][j2][k2].connectivityFlag = 2; // true data
+
+						}
 
 					}
 					else // outside the propagation plane
@@ -2243,6 +2269,7 @@ REAL angle_vect(REAL_DIM a, REAL_DIM b)
 	else
 	{
 		cp /= sqrt(d1*d2);
+		cp = fabs(cp); // added line
 		if (fabs(cp - 1.0) < tol)
 			cp = 0.0;
 		else if (fabs(cp + 1.0) < tol)
