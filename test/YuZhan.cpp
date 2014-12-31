@@ -132,7 +132,7 @@ typedef int INT32;
 int main()
 {
 	time_t t_start, t_end;
-	t_start = time(NULL);
+	t_start = clock();
 	ifstream scr0;
 	int begin, end, size;
 	REAL_DIM *vert_v;
@@ -469,8 +469,8 @@ int main()
 			for (k = 0; k<m; k++)
 			{
 				itmp = count[i][j][k];
-				if (vds[i][j][k].connectivityFlag == true
-					&& itmp > 0)// connectivity check is really useful to skip very smooth portions, and catch noisy part.
+				if (vds[i][j][k].connectivityFlag == true && 
+					itmp > 0)// connectivity check is really useful to skip very smooth portions, and catch noisy part.
 
 				{
 					int* localIdx = new int[itmp];
@@ -692,7 +692,7 @@ int main()
 		double vsize = vmax - vmin;
 
 		// back up connectivityFlag
-		for (i = 0; i < m; i++)
+		/*		for (i = 0; i < m; i++)
 		{
 			for (j = 0; j < m; j++)
 			{
@@ -702,7 +702,7 @@ int main()
 				}
 			}
 		}
-
+		*/
 
 		// *** Voxel propagation  ***
 		// Initialization
@@ -741,11 +741,11 @@ int main()
 		// Propagation
 		int count_untouched = 0;
 
-		i2 = 2;
+		i2 = 1;
 		//i2 = HISTOGNUM-1;
 		int break_flag = false;
 
-		for (l = 1; l<i2; l++)
+		for (l = 0; l<i2; l++)
 		{
 			for (i = 0; i<m; i++)
 			{
@@ -758,11 +758,12 @@ int main()
 							if (vds[i][j][k].connectivityFlag == -1) // untouched
 							{
 								propagateVoxel(i, j, k, vds, m, list);
-								itmp = count[i][j][k];
+								/*itmp = count[i][j][k];
 								for (l = 0; l < itmp; l++)
 								{
 									id = list[i][j][k][l];
 								}
+								*/
 								break_flag = true; // single initial point
 							}
 						}
@@ -794,7 +795,7 @@ int main()
 						}
 					}
 
-					else  // true data + untouched
+					else  // true data
 					{
 						for (l = 0; l<itmp; l++)
 						{
@@ -811,7 +812,7 @@ int main()
 	}
 	tmpoup1.close();
 	tmpoup2.close();
-	t_end = time(NULL);
+	t_end = clock();
 	cout << "run time:";
 	cout << t_end-t_start << endl;
 
@@ -1162,10 +1163,10 @@ void calcEigenVector(int num_nlist, INT32 *nlist, REAL_DIM vtmp2, REAL_DIM* vert
 	jacobi(A, 3, D, V3, &nrot);
 
 	// abs
-	for (j = 0; j < DIM; j++)
-	{
+//	for (j = 0; j < DIM; j++)
+//	{
 		//D[j + 1] = fabs(D[j+1]);
-	}
+//	}
 
 	/* output of eigenvalues in descending order */
 	eigsrt(D, V3, 3);
@@ -2074,13 +2075,13 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen, 
 	nid.i = i0, nid.j = j0, nid.k = k0;
 	int i1, j1, k1, i2, j2, k2, l;
 	float A, B, C, D, d;
-	float scale = 1*min_cubesize; // best for this case
+	float scale = 0;// 1 * min_cubesize; // best for this case
 	float tmp, angle_t = 0; //0.5*M_PI; // 9 degree, best for this case
 	//REAL angle_t2 = 0.75*M_PI;
-	float dist_angl_ratio = 0.44;
+	float dist_angl_ratio = 0.68;
 	float dist_angl;
 	//float dist_angl_threshold = 0.3;
-	float dist_angl_threshold = 0;
+	float dist_angl_threshold = 0.355;
 
 	num_wave_front = 1;
 	wave_front[0] = nid;
@@ -2124,7 +2125,7 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen, 
 //						continue;
 					
 					// no difference
-					int kk;
+/*					int kk;
 					int aa, bb, cc;
 					for (kk = 0; kk < vds[i2][j2][k2].count; kk++)
 					{
@@ -2136,8 +2137,7 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen, 
 						}
 					}
 
-
-
+*/
 
 					if (vds[i2][j2][k2].count == 0)
 					{
@@ -2167,9 +2167,9 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen, 
 					*/
 
 					// linear combination of distance and angle
-					//dist_angl = (1 - dist_angl_ratio)*(tmp - angle_t) / (M_PI / 2) + \
-						//dist_angl_ratio*(d - scale) / min_cubesize;
-					dist_angl = (1 - dist_angl_ratio)*(tmp - angle_t) / (M_PI/2) + \
+					dist_angl = (1 - dist_angl_ratio)*(tmp - angle_t) / (M_PI / 2) + \
+						dist_angl_ratio*(d - scale) / min_cubesize/2;
+					//dist_angl = (1 - dist_angl_ratio)*(1 - cos(tmp)) / 1 + \
 						dist_angl_ratio*(d - scale) / min_cubesize;
 
 					//if (d < scale) // in the propagation plane
@@ -2178,10 +2178,10 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen, 
 					if (dist_angl < dist_angl_threshold)
 					// The purpose of the second condition is to get rid of cubes with no or very few points
 					{
-						if (i2 == aa && j2 == bb && k2 == cc)
+						/*if (i2 == aa && j2 == bb && k2 == cc)
 						{
 							aa = aa;
-						}
+						}*/
 						if (vds[i2][j2][k2].connectivityFlag == -1)  // untouched
 						{
 							nid.i = i2, nid.j = j2, nid.k = k2;
@@ -2199,7 +2199,22 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen, 
 						else // treated as noise before
 						{
 							vds[i2][j2][k2].connectivityFlag = 2; // true data
-
+							/*
+							nid.i = i2, nid.j = j2, nid.k = k2;
+							wave_front2[num_wave_front2++] = nid;
+							vds[i2][j2][k2].connectivityFlag = 0;  // unprocessed
+							*/
+							
+							/*
+							dist_angl = (1 - 0.9)*(1-cos(tmp)) / 1 + \
+								0.9*(d - scale) / min_cubesize;
+							if (dist_angl < 0)
+							{
+								nid.i = i2, nid.j = j2, nid.k = k2;
+								wave_front2[num_wave_front2++] = nid;
+								vds[i2][j2][k2].connectivityFlag = 0;  // unprocessed
+							}
+							*/
 						}
 
 					}
@@ -2269,13 +2284,12 @@ REAL angle_vect(REAL_DIM a, REAL_DIM b)
 	else
 	{
 		cp /= sqrt(d1*d2);
-		cp = fabs(cp); // added line
 		if (fabs(cp - 1.0) < tol)
 			cp = 0.0;
 		else if (fabs(cp + 1.0) < tol)
-			cp = M_PI;
+			cp = 0.0;
 		else
-			cp = acos((cp));
+			cp = acos(fabs(cp));
 	}
 
 	return cp;
