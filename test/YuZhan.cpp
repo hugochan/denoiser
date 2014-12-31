@@ -138,8 +138,8 @@ int main()
 	REAL_DIM *vert_v;
 
 	//add
-	//char input_filename[50] = "NoiseModel1.asc";
-	char input_filename[50] = "NoiseModel2.asc";
+	char input_filename[50] = "NoiseModel1.asc";
+	//char input_filename[50] = "NoiseModel2.asc";
 
 	//
 
@@ -285,8 +285,8 @@ int main()
 	//m = (int) pow(10, (1/3.0)*log10(double(curvert)));
 
 	//if(m > 200)  
-	//m = 100;
-	m = 50;
+	m = 100;
+	//m = 50;
 
 	for (j = 0; j < DIM; j++)
 	{
@@ -2075,13 +2075,13 @@ void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen, 
 	nid.i = i0, nid.j = j0, nid.k = k0;
 	int i1, j1, k1, i2, j2, k2, l;
 	float A, B, C, D, d;
-	float scale = 0;// 1 * min_cubesize; // best for this case
-	float tmp, angle_t = 0; //0.5*M_PI; // 9 degree, best for this case
+	float scale = 0;// 0.5 * min_cubesize;// 1 * min_cubesize; // best for this case
+	float tmp, angle_t = 0;// 0.01*M_PI; //0.5*M_PI; // 9 degree, best for this case
 	//REAL angle_t2 = 0.75*M_PI;
-	float dist_angl_ratio = 0.68;
+	float dist_angl_ratio = 0.6;
 	float dist_angl;
 	//float dist_angl_threshold = 0.3;
-	float dist_angl_threshold = 0.355;
+	float dist_angl_threshold = 0.6;
 
 	num_wave_front = 1;
 	wave_front[0] = nid;
