@@ -10,8 +10,14 @@
 
 using namespace std;
 
+int process_count = 0;
 
 int test = 1;
+#define UNTOUCHED (char)-1
+#define UNPROCESSED (char)0
+#define PROCESSED (char)1
+#define TRUEDATA (char)2
+#define OUTLIERT (char)3
 #define DIM 3
 #define BIG  1000000000
 #define HISTOGNUM  30
@@ -46,7 +52,20 @@ typedef INT16 INT16_DIM[DIM];
 typedef REAL REAL_DIM[DIM];
 typedef REAL REAL_33[3][3];
 
+struct VoxelDataStruc
+{
+	int count;
+	int connectivityFlag_backup;
+	int connectivityFlag;   //  false -- isolated,  true -- connected
+	// -1 ---  untouched  0 -- unprocessed,  1 -- processed   2 -- true data  3 -- outlier 
+	float maxError;
+	// local coord directions
+	REAL_DIM n;  // z direction  the third eigen vector
 
+	char hlevel;  // -1 -- default,  0 -- 100 histogram bins
+
+	REAL centroid[DIM];
+};
 
 
 
@@ -58,6 +77,12 @@ static REAL maxarg2;
 	(maxarg2) : (maxarg1))
 
 // declare
+REAL angle_vect(REAL_DIM a, REAL_DIM b);
+void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen);
+void propagateVoxelQuadratic(int i0, int j0, int k0, VoxelDataStruc ***vds, int  ***count,
+	int ****list, char *nodeflag, int cubelen, REAL_DIM* vert_v);
+void calcCentroid(int num_nlist, INT32 *nlist, REAL_DIM* vert_v, REAL centroid[]);
+void tellTrueFalse(int num_nlist, INT32 *nlist, REAL_DIM* vert_v, bool* istatus);
 void calcEigenVector(int num_nlist, INT32 *nlist, REAL_DIM vtmp2, REAL_DIM* vert_v);
 void calcPointNoise(int num_nlist, INT32 *nlist, REAL_DIM vtmp2, REAL noise[], REAL_DIM* vert_v);
 void jacobi(REAL **a, int n, REAL d[], REAL **v, int *nrot);
@@ -93,18 +118,10 @@ REAL *W = dvector(1, 6);
 REAL *X = dvector(1, 6);
 REAL E[4][4], S[4], F[4][4];
 REAL_DIM V[3];
+int curvert;
+REAL min_cubesize = BIG;
+INT16 SearchBaseRadius = 30; // 
 
-struct VoxelDataStruc
-{
-	unsigned char connectivityFlag;   //  false -- isolated,  true -- connected
-	// -1 ---  untouched  0 -- unprocessed,  1 -- processed   2 -- true data  3 -- outlier 
-	float maxError;
-	// local coord directions
-	REAL_DIM n;  // z direction  the third eigen vector
-
-	char hlevel;  // -1 -- default,  0 -- 100 histogram bins
-
-};
 
 struct CoordDataStruc
 {
@@ -126,14 +143,16 @@ int main()
 	time_t t_start, t_end;
 	t_start = time(NULL);
 	ifstream scr0;
+	int begin, end, size;
 	REAL_DIM *vert_v;
-	int begin, end, size, curvert;
 
 	//add
-	char input_filename[50] = "NoiseModel1.asc";
+	//char input_filename[50] = "NoiseModel1.asc";
+	char input_filename[50] = "NoiseModel2.asc";
+
 	//
 
-	scr0.open("NoiseModel1.asc", ios::in);   // .asc file
+	scr0.open(input_filename, ios::in);   // .asc file
 	if (!scr0)
 	{
 		cout << "Open file error with " << input_filename << endl;
@@ -206,21 +225,22 @@ int main()
 
 	str = memblock;
 	str_sav = str;
+	// add
+	int len0;
+	char* token;
+	char* current_line = new char[size];
+	char * seps = " ";
+	//
 
 	while (str = strstr(str, "\n"))
 	{
-		// add
-		int len0, j;
-		char* current_line = new char;
-		char* token = new char;
-		char * seps = " ";
-		//
 
 		len0 = str - str_sav;
+
 		//if(str_sav[0] != '#' && len0 >= 24)
 		if (str_sav[0] != '#' && len0 >= ASC_LINE_LEN)
 		{
-			for (j = 0; j<len0; j++)
+			for (j = 0; j < len0; j++)
 				current_line[j] = str_sav[j];
 			current_line[j] = '\0';
 
@@ -247,41 +267,47 @@ int main()
 			str++;
 		str_sav = str;
 	} // end of while(str=strstr(str, "\n"))
+	delete[] current_line;
 
 
 	curvert = i;
-	delete[]memblock;
+	delete[] memblock;
 
 
 	// create rectangular grids
 	float xmin[DIM], xmax[DIM];
-	for (j = 0; j<3; j++)
+	for (j = 0; j < 3; j++)
 	{
 		xmin[j] = BIG;
 		xmax[j] = -BIG;
 	}
 
-	for (i = 0; i<curvert; i++)
+	for (i = 0; i < curvert; i++)
 	for (j = 0; j<3; j++)
 	{
 		if (xmin[j]>vert_v[i][j]) xmin[j] = vert_v[i][j];
-		if (xmax[j]<vert_v[i][j]) xmax[j] = vert_v[i][j];
+		if (xmax[j] < vert_v[i][j]) xmax[j] = vert_v[i][j];
 	}
-
 
 	int m;
 
 	//m = (int) pow(10, (1/3.0)*log10(double(curvert)));
 
 	//if(m > 200)  
-	m = 100;
-	//m = 50;
+	//m = 100;
+	m = 50;
+
+	for (j = 0; j < DIM; j++)
+	{
+		if (min_cubesize >(xmax[j] - xmin[j]) / m)
+			min_cubesize = (xmax[j] - xmin[j]) / m;
+	}
 
 
 	int ***count = new int**[m];
 	int ****list = new int***[m];
 	VoxelDataStruc ***vds = new VoxelDataStruc**[m];  // Create volxel data structure
-	for (i = 0; i<m; i++)
+	for (i = 0; i < m; i++)
 	{
 		try
 		{
@@ -289,9 +315,9 @@ int main()
 			list[i] = new int**[m];
 			vds[i] = new VoxelDataStruc*[m];
 		}
-		catch(std::bad_alloc&)
+		catch (std::bad_alloc&)
 		{
-			
+
 		}
 		for (j = 0; j < m; j++)
 		{
@@ -305,7 +331,7 @@ int main()
 			{
 
 			}
-			for (k = 0; k<m; k++)
+			for (k = 0; k < m; k++)
 			{
 				try
 				{
@@ -313,31 +339,31 @@ int main()
 					list[i][j][k] = NULL;
 					vds[i][j][k].connectivityFlag = false;
 				}
-				catch(std::bad_alloc&)
+				catch (std::bad_alloc&)
 				{
-				
-				}	
+
+				}
 			}
 		}
 	}
 
 	int index[DIM];
-	for (i = 0; i<curvert; i++)
+	for (i = 0; i < curvert; i++)
 	{
-		for (j = 0; j<3; j++)
+		for (j = 0; j < 3; j++)
 		{
 			index[j] = floor((vert_v[i][j] - xmin[j]) / (xmax[j] - xmin[j])*(m - 1) + 0.5);
 			if (index[j] >= m)
-				assert(index[j]<m);
+				assert(index[j] < m);
 		}
 		count[index[0]][index[1]][index[2]]++;
 	}
 
-	for (i = 0; i<m; i++)
+	for (i = 0; i < m; i++)
 	{
-		for (j = 0; j<m; j++)
+		for (j = 0; j < m; j++)
 		{
-			for (k = 0; k<m; k++)
+			for (k = 0; k < m; k++)
 			{
 				list[i][j][k] = new int[count[i][j][k]];
 				count[i][j][k] = 0;
@@ -348,11 +374,15 @@ int main()
 	for (j = 0; j<3; j++)
 		assert((xmax[j] - xmin[j])> 0.00001);
 
-	for (i = 0; i<curvert; i++)
+	for (i = 0; i < curvert; i++)
 	{
-		for (j = 0; j<3; j++)
+		for (j = 0; j < 3; j++)
 		{
 			index[j] = floor((vert_v[i][j] - xmin[j]) / (xmax[j] - xmin[j])*(m - 1) + 0.5);
+		}
+		if (index[0] == 3 && index[1] == 40 && index[2] == 28)
+		{
+			i = i;
 		}
 		list[index[0]][index[1]][index[2]][count[index[0]][index[1]][index[2]]] = i;
 		count[index[0]][index[1]][index[2]]++;
@@ -366,7 +396,7 @@ int main()
 
 
 	// add
-	float* vtmp = new float;
+	float* vtmp = new float[DIM];
 	float* GmaxerrorArray = new float[curvert];
 	float* EigenFactor = new float;
 	//
@@ -375,148 +405,91 @@ int main()
 	int *icount = new int[curvert];
 	bool *istatus = new bool[curvert];
 	REAL noise[2000];
-	int choice = 6;  //  1 -- eigen value    2 --  least-square fitting error  3 -- density 4 -- eigen value plus
-					//  6 -- non-connectivity factor (outlier should be greater)
+	int choice = 8;  //  1 -- eigen value    2 --  least-square fitting error  3 -- density 4 -- eigen value plus
+	//  6 -- non-connectivity factor (outlier should be greater) 7 -- conn + telltruefalse
+	// 8 -- connectivity + Bi-means Cluster + surface propogation
 	int ic = 0;
+	int inum = 0;
 	int istep = 3;
-	if (choice == 6) ithreshold = 2;
-	// setup voxel information
-	for (i = 0; i<m; i++)
+	if (choice == 6 || choice == 7 || choice == 8)
 	{
-		for (j = 0; j<m; j++)
+		ithreshold = 2;
+		// setup voxel information
+		for (i = 0; i < m; i++)
 		{
-			for (k = 0; k<m; k++)
+			for (j = 0; j < m; j++)
 			{
-				if (vds[i][j][k].connectivityFlag == false)
+				for (k = 0; k<m; k++)
 				{
-
-					if (count[i][j][k] > ithreshold)
+					vds[i][j][k].count = count[i][j][k]; //  count
+					if (vds[i][j][k].connectivityFlag == false)
 					{
-						
-						vds[i][j][k].connectivityFlag = true;
-						if (i + 1<m)  vds[i + 1][j][k].connectivityFlag = true;
-						if (j + 1<m)  vds[i][j + 1][k].connectivityFlag = true;
-						if (k + 1<m)  vds[i][j][k + 1].connectivityFlag = true;
-						if (i - 1 >= 0)  vds[i - 1][j][k].connectivityFlag = true;
-						if (j - 1 >= 0)  vds[i][j - 1][k].connectivityFlag = true;
-						if (k - 1 >= 0)  vds[i][j][k - 1].connectivityFlag = true;
-				
-						/*
-						vds[i][j][k].connectivityFlag = true;
-						if (i + 1 < m)
-						{
-							vds[i + 1][j][k].connectivityFlag = true;
-							if (i + 2 < m) vds[i + 2][j][k].connectivityFlag = true;
-						}
-						if (j + 1 < m)
-						{
-							vds[i][j + 1][k].connectivityFlag = true;
-							if (j + 2 < m) vds[i][j + 2][k].connectivityFlag = true;
-						}
-						if (k + 1 < m)
-						{
-							vds[i][j][k + 1].connectivityFlag = true;
-							if (k + 2 < m) vds[i][j][k + 2].connectivityFlag = true;
-						}
-						if (i - 1 >= 0)
-						{
-							vds[i - 1][j][k].connectivityFlag = true;
-							if(i - 2 >= 0) vds[i - 2][j][k].connectivityFlag = true;
-						}
-						if (j - 1 >= 0)
-						{
-							vds[i][j - 1][k].connectivityFlag = true;
-							if(j - 2 >= 0) vds[i][j - 2][k].connectivityFlag = true;
-						}
-						if (k - 1 >= 0)
-						{
-							vds[i][j][k - 1].connectivityFlag = true;
-							if (k - 2 >= 0) vds[i][j][k - 2].connectivityFlag = true;
-						}
-						*/
-					}
-					else
-					{
-						
-						if ((i + 1<m) && count[i + 1][j][k]> ithreshold)
-						{
-							vds[i][j][k].connectivityFlag = true; continue;
-						}
-						if ((j + 1<m) && count[i][j + 1][k]> ithreshold)
-						{
-							vds[i][j][k].connectivityFlag = true; continue;
-						}
 
-						if ((k + 1<m) && count[i][j][k + 1]> ithreshold)
+						if (count[i][j][k] > ithreshold)
 						{
-							vds[i][j][k].connectivityFlag = true; continue;
-						}
-						if ((i - 1 >= 0) && count[i - 1][j][k]> ithreshold)
-						{
-							vds[i][j][k].connectivityFlag = true; continue;
-						}
-						if ((j - 1 >= 0) && count[i][j - 1][k]> ithreshold)
-						{
-							vds[i][j][k].connectivityFlag = true; continue;
-						}
-						if ((k - 1 >= 0) && count[i][j][k - 1]> ithreshold)
-						{
-							vds[i][j][k].connectivityFlag = true; continue;
-						}
-					
-						/*
-						if (((i + 1 < m) && count[i + 1][j][k]> ithreshold) || ((i + 2 < m) && count[i + 2][j][k]> ithreshold))
-						{
-							vds[i][j][k].connectivityFlag = true; continue;
-						}
-						if (((j + 1<m) && count[i][j + 1][k]> ithreshold) || ((j + 2 < m) && count[i][j + 2][k]> ithreshold))
-						{
-							vds[i][j][k].connectivityFlag = true; continue;
-						}
 
-						if (((k + 1<m) && count[i][j][k + 1]> ithreshold) || ((k + 2 < m) && count[i][j][k + 2]> ithreshold))
-						{
-							vds[i][j][k].connectivityFlag = true; continue;
+							vds[i][j][k].connectivityFlag = true;
+							if (i + 1 < m)  vds[i + 1][j][k].connectivityFlag = true;
+							if (j + 1 < m)  vds[i][j + 1][k].connectivityFlag = true;
+							if (k + 1 < m)  vds[i][j][k + 1].connectivityFlag = true;
+							if (i - 1 >= 0)  vds[i - 1][j][k].connectivityFlag = true;
+							if (j - 1 >= 0)  vds[i][j - 1][k].connectivityFlag = true;
+							if (k - 1 >= 0)  vds[i][j][k - 1].connectivityFlag = true;
 						}
-						if (((i - 1 >= 0) && count[i - 1][j][k]> ithreshold) || ((i - 2 >= 0) && count[i - 2][j][k]> ithreshold))
+						else
 						{
-							vds[i][j][k].connectivityFlag = true; continue;
-						}
-						if (((j - 1 >= 0) && count[i][j - 1][k]> ithreshold) || ((j - 2 >= 0) && count[i][j - 2][k]> ithreshold))
-						{
-							vds[i][j][k].connectivityFlag = true; continue;
-						}
-						if ((k - 1 >= 0) && count[i][j][k - 1]> ithreshold || ((k - 2 >= 0) && count[i][j][k - 2]> ithreshold))
-						{
-							vds[i][j][k].connectivityFlag = true; continue;
-						}
-						*/
 
+							if ((i + 1 < m) && count[i + 1][j][k] > ithreshold)
+							{
+								vds[i][j][k].connectivityFlag = true; continue;
+							}
+							if ((j + 1 < m) && count[i][j + 1][k] > ithreshold)
+							{
+								vds[i][j][k].connectivityFlag = true; continue;
+							}
+
+							if ((k + 1 < m) && count[i][j][k + 1] > ithreshold)
+							{
+								vds[i][j][k].connectivityFlag = true; continue;
+							}
+							if ((i - 1 >= 0) && count[i - 1][j][k] > ithreshold)
+							{
+								vds[i][j][k].connectivityFlag = true; continue;
+							}
+							if ((j - 1 >= 0) && count[i][j - 1][k] > ithreshold)
+							{
+								vds[i][j][k].connectivityFlag = true; continue;
+							}
+							if ((k - 1 >= 0) && count[i][j][k - 1] > ithreshold)
+							{
+								vds[i][j][k].connectivityFlag = true; continue;
+							}
+						}
 					}
 				}
 			}
 		}
 	}
 
-	for (i = 0; i<curvert; i++)
-		icount[i] = 0;
-	for (i = 0; i<m; i++)
+	/*
+	for (i = 0; i < curvert; i++)
+	icount[i] = 0;
+	*/
+	for (i = 0; i < m; i++)
 	{
-		for (j = 0; j<m; j++)
+		for (j = 0; j < m; j++)
 		{
 			for (k = 0; k<m; k++)
 			{
 				itmp = count[i][j][k];
-				if (itmp > ithreshold   // any ithreshold > 2 becomes disruptive
+				if (vds[i][j][k].connectivityFlag == true
+					&& itmp > 0)// connectivity check is really useful to skip very smooth portions, and catch noisy part.
 
-					//  connectivity check is really useful to skip very smooth portions, and catch noisy part.
-					||
-					vds[i][j][k].connectivityFlag == true)
 				{
 					int* localIdx = new int[itmp];
-					for (l = 0; l<itmp; l++)
+					for (l = 0; l < itmp; l++)
 						localIdx[l] = list[i][j][k][l];
-					
+
 					switch (choice)
 					{
 					case 1:
@@ -536,51 +509,118 @@ int main()
 					case 6:
 						calcEigenVector(itmp, localIdx, vtmp, vert_v);
 						break;
+					case 8:
+						calcCentroid(itmp, localIdx, vert_v, vds[i][j][k].centroid);
+						calcEigenVector(itmp, localIdx, vtmp, vert_v);
+						vds[i][j][k].n[0] = V3[3][1];
+						vds[i][j][k].n[1] = V3[3][2];
+						vds[i][j][k].n[2] = V3[3][3];
+						break;
+					case 7:
+
+						if ((i + 1 < m) && count[i + 1][j][k] >= ithreshold)
+						{
+							inum += 1;
+						}
+						if ((j + 1 < m) && count[i][j + 1][k] >= ithreshold)
+						{
+							inum += 1;
+						}
+
+						if ((k + 1 < m) && count[i][j][k + 1] >= ithreshold)
+						{
+							inum += 1;
+						}
+						if ((i - 1 >= 0) && count[i - 1][j][k] >= ithreshold)
+						{
+							inum += 1;
+						}
+						if ((j - 1 >= 0) && count[i][j - 1][k] >= ithreshold)
+						{
+							inum += 1;
+						}
+						if ((k - 1 >= 0) && count[i][j][k - 1] >= ithreshold)
+						{
+							inum += 1;
+						}
+
+						if (inum <= 4)
+						{
+							for (l = 0; l < itmp; l++)
+							{
+								id = localIdx[l];
+								istatus[id] = true;
+							}
+						}
+						else
+						{
+
+							tellTrueFalse(itmp, localIdx, vert_v, istatus);
+						}
+						/*
+						if (i == 0 || i == m - 1 || j == 0 || j == m - 1 || k == 0 || k == m - 1) // margin points
+						{
+						tellTrueFalse(itmp, localIdx, vert_v, istatus);
+						}
+						else
+						{
+						for (l = 0; l < itmp; l++)
+						{
+						id = localIdx[l];
+						istatus[id] = true;
+						}
+						}
+						*/
+						break;
 					}
 					/*
 					if (choice == 6)
 					{
-						ic = 0;
-						if (i<m - istep && count[(i + istep) % m][j][k] == 0)   ic++;
-						if (j<m - istep && count[i][(j + istep) % m][k] == 0)   ic++;
-						if (k<m - istep && count[i][j][(k + istep) % m] == 0)   ic++;
-						if (i>2 && count[(i - istep) % m][j][k] == 0)   ic++;
-						if (j>2 && count[i][(j + m - istep) % m][k] == 0)   ic++;
-						if (k>2 && count[i][j][(k + m - istep) % m] == 0)   ic++;
+					ic = 0;
+					if (i<m - istep && count[(i + istep) % m][j][k] == 0)   ic++;
+					if (j<m - istep && count[i][(j + istep) % m][k] == 0)   ic++;
+					if (k<m - istep && count[i][j][(k + istep) % m] == 0)   ic++;
+					if (i>2 && count[(i - istep) % m][j][k] == 0)   ic++;
+					if (j>2 && count[i][(j + m - istep) % m][k] == 0)   ic++;
+					if (k>2 && count[i][j][(k + m - istep) % m] == 0)   ic++;
 					}
 					*/
-
-					for (l = 0; l<itmp; l++)
+					if (choice != 7)
 					{
-						id = localIdx[l];
-
-						switch (choice)
+						for (l = 0; l < itmp; l++)
 						{
-						case 1:
-							GmaxerrorArray[id] = vtmp[2];
-							break;
-						case 2:
-							GmaxerrorArray[id] = noise[l];
-							break;
-						case 3:
-							GmaxerrorArray[id] = count[i][j][k];
-							break;
-						case 4:
-							GmaxerrorArray[id] = NormalizeEigenValue(vtmp);
-						case 5:
-							GmaxerrorArray[id] = *EigenFactor;
-						case 6: // non-connectivity factor
-							GmaxerrorArray[id] = vtmp[2];
-							break;
-						}
+							id = localIdx[l];
 
-						istatus[id] = true;
+							switch (choice)
+							{
+							case 1:
+								GmaxerrorArray[id] = vtmp[2];
+								break;
+							case 2:
+								GmaxerrorArray[id] = noise[l];
+								break;
+							case 3:
+								GmaxerrorArray[id] = count[i][j][k];
+								break;
+							case 4:
+								GmaxerrorArray[id] = NormalizeEigenValue(vtmp);
+							case 5:
+								GmaxerrorArray[id] = *EigenFactor;
+							case 6: // non-connectivity factor
+								GmaxerrorArray[id] = vtmp[2];
+								break;
+							case 8:
+								GmaxerrorArray[id] = vtmp[2];
+							}
+
+							istatus[id] = true;
+						}
 					}
-					delete []localIdx;
+					delete[]localIdx;
 				}
 				else  // small point cloud
 				{
-					for (l = 0; l<itmp; l++)
+					for (l = 0; l < itmp; l++)
 					{
 						id = list[i][j][k][l];
 						istatus[id] = false;
@@ -591,74 +631,638 @@ int main()
 		}
 	}
 
-	// Bi-means clustering
-	double vmax = -BIG, vmin = BIG, va = 0.0;
-	int num_point = 0;
-	for (i = 0; i<curvert; i++)
+	if (choice != 7 && choice != 8)
 	{
-		if (istatus[i] == true)
+		// Bi-means clustering
+		double vmax = -BIG, vmin = BIG, va = 0.0;
+		int num_point = 0;
+		for (i = 0; i<curvert; i++)
 		{
-			if (GmaxerrorArray[i]> vmax) vmax = GmaxerrorArray[i];
-			if (GmaxerrorArray[i]< vmin) vmin = GmaxerrorArray[i];
-			num_point++;
-		}
-	}
-
-	ihistogram = 15;
-	double vsize = vmax - vmin;
-	for (i = 0; i<curvert; i++)
-	{
-		if (istatus[i] == true)
-		{
-			j = int((GmaxerrorArray[i] - vmin)*float(HISTOGNUM - 1) / vsize);
-
-			if (j >= ihistogram)
+			if (istatus[i] == true)
 			{
-				istatus[i] = false;
-				tmpoup2 << vert_v[i][0] << " " << vert_v[i][1] << " " << vert_v[i][2] << endl;
+				if (GmaxerrorArray[i]> vmax) vmax = GmaxerrorArray[i];
+				if (GmaxerrorArray[i] < vmin) vmin = GmaxerrorArray[i];
+				num_point++;
+			}
+		}
+
+		ihistogram = 15;
+		double vsize = vmax - vmin;
+		for (i = 0; i < curvert; i++)
+		{
+			if (istatus[i] == true)
+			{
+				j = int((GmaxerrorArray[i] - vmin)*float(HISTOGNUM - 1) / vsize);
+
+				if (j >= ihistogram)
+				{
+					istatus[i] = false;
+					tmpoup2 << vert_v[i][0] << " " << vert_v[i][1] << " " << vert_v[i][2] << endl;
+				}
+				else
+				{
+					tmpoup1 << vert_v[i][0] << " " << vert_v[i][1] << " " << vert_v[i][2] << endl;
+				}
 			}
 			else
 			{
-				tmpoup1 << vert_v[i][0] << " " << vert_v[i][1] << " " << vert_v[i][2] << endl;
+				tmpoup2 << vert_v[i][0] << " " << vert_v[i][1] << " " << vert_v[i][2] << endl;
+
 			}
 		}
-		else
-		{
-			tmpoup2 << vert_v[i][0] << " " << vert_v[i][1] << " " << vert_v[i][2] << endl;
 
+	}
+	else if (choice == 7)
+	{
+		for (i = 0; i < curvert; i++)
+		{
+			if (istatus[i] == true)
+			{
+
+				tmpoup1 << vert_v[i][0] << " " << vert_v[i][1] << " " << vert_v[i][2] << endl;
+			}
+			else
+			{
+				tmpoup2 << vert_v[i][0] << " " << vert_v[i][1] << " " << vert_v[i][2] << endl;
+			}
 		}
 	}
+	else if (choice == 8)
+	{
+		// Bi-means clustering
+		double vmax = -BIG, vmin = BIG;
+		//		int num_point = 0;
+		for (i = 0; i<curvert; i++)
+		{
+			if (istatus[i] == true)
+			{
+				if (GmaxerrorArray[i]> vmax) vmax = GmaxerrorArray[i];
+				if (GmaxerrorArray[i] < vmin) vmin = GmaxerrorArray[i];
+				//				num_point++;
+			}
+		}
+
+		double vsize = vmax - vmin;
+
+		// back up connectivityFlag
+		for (i = 0; i < m; i++)
+		{
+			for (j = 0; j < m; j++)
+			{
+				for (k = 0; k < m; k++)
+				{
+					vds[i][j][k].connectivityFlag_backup = vds[i][j][k].connectivityFlag;
+				}
+			}
+		}
+
+
+		// *** Voxel propagation  ***
+		// Initialization
+		// Propagation
+		int i2, j2, k2;
+
+		int palgorithm = 2;  //  1 -- linear propagation   2 -- quadratic propagation
+		if (palgorithm == 1)
+		{
+			for (i = 0; i < m; i++)
+			{
+				for (j = 0; j < m; j++)
+				{
+					for (k = 0; k < m; k++)
+					{
+						itmp = count[i][j][k];
+
+						if (itmp == 0 || vds[i][j][k].connectivityFlag == false)
+						{
+							vds[i][j][k].hlevel = HISTOGNUM;  // for propagation purpose
+						}
+						else
+						{
+							for (l = 0; l < itmp; l++)
+							{
+								id = list[i][j][k][l];
+								if (istatus[id] == true)
+								{
+									i2 = int((GmaxerrorArray[id] - vmin)*float(HISTOGNUM - 1) / vsize);
+									if (i2 >= HISTOGNUM) i2 = HISTOGNUM - 1;
+									vds[i][j][k].hlevel = i2;
+								}
+							}
+						}
+						vds[i][j][k].connectivityFlag = -1; // for propagation purpose
+					}
+				}
+			}
+		}
+		else if (palgorithm == 2)
+		{
+			for (i = 0; i < m; i++)
+			{
+				for (j = 0; j < m; j++)
+				{
+					for (k = 0; k < m; k++)
+					{
+						vds[i][j][k].connectivityFlag = UNPROCESSED;
+						vds[i][j][k].hlevel = HISTOGNUM - 1;  // for those cubes with few points
+					}
+				}
+			}
+		}
+
+		REAL_DIM dx;
+		for (i = 0; i < DIM; i++)
+			dx[i] = (xmax[i] - xmin[i]) / m;
+		const int LEN = 2, LEN3 = 2000;
+		int i1, j1, k1, ii, num_nlist, len1 = 1;
+		int *nlist = new int[LEN3];
+		int cubelen = m, nrot, num_n, id2;
+		REAL_DIM centroid;
+		REAL sum_error, tmp;
+
+
+		int itmp2;
+		REAL x, y, z, wmax, wmin;
+		// determine curvatures
+		REAL a[7], w, da, dt, *d = new REAL[LEN3];
+		REAL_DIM w1, v_surf, w2;
+		REAL error = 0.0, max_error = 0.0, tmp3, tmp2, tmp_max_error, sum;
+
+		REAL_DIM *c = new REAL_DIM[LEN3];
+		REAL_DIM *c2 = new REAL_DIM[1];
+		REAL error_t = 0.002;
+
+		REAL *W = dvector(1, 6);
+		REAL *X = dvector(1, 6);
+		REAL **V2 = dmatrix(1, 6, 1, 6);
+		REAL **A = dmatrix(1, 3, 1, 3);
+		REAL *D = dvector(1, 3);
+		REAL **V3 = dmatrix(1, 3, 1, 3);
+
+		REAL **U = dmatrix(1, LEN3 + 1, 1, 6);
+		REAL *B = dvector(1, LEN3 + 1);
+		REAL_DIM *C2 = new REAL_DIM[LEN3 + 1];
+
+		REAL_DIM V[3];
+		REAL E[4][4], S[4], F[4][4];
+
+
+		if (palgorithm == 2)  // quadratic propagation
+		{
+			// clustering based on LSF
+			for (i1 = 0; i1 < m; i1++)
+			{
+				for (j1 = 0; j1 < m; j1++)
+				{
+					for (k1 = 0; k1 < m; k1++)
+					{
+						if (vds[i1][j1][k1].connectivityFlag == UNPROCESSED)
+						{
+							itmp = count[i1][j1][k1];
+							if (itmp == 0)
+								continue;
+							num_nlist = 0;
+							for (ii = 0; ii < itmp; ii++)
+							{
+								id = list[i1][j1][k1][ii];
+								nlist[num_nlist++] = id;
+							}
+
+							vds[i1][j1][k1].connectivityFlag = PROCESSED;
+
+							if (num_nlist < 6)  // extend one ring
+							{
+
+								for (i = -len1; i <= len1; i++)
+								for (j = -len1; j <= len1; j++)
+								for (k = -len1; k <= len1; k++)
+								{
+									i2 = i1 + i, j2 = j1 + j, k2 = k1 + k;  // x1, y1, z1
+
+									if (i == 0 && j == 0 && k == 0)
+										continue;
+									if (i2<0 || j2 <0 || k2<0)
+										continue;
+									if (i2>cubelen - 1 || j2>cubelen - 1 || k2>cubelen - 1)
+										continue;
+
+									itmp = count[i2][j2][k2];
+
+									for (ii = 0; ii<itmp; ii++)
+									{
+										id = list[i2][j2][k2][ii];
+										nlist[num_nlist++] = id;
+									}
+
+									vds[i2][j2][k2].connectivityFlag = PROCESSED;
+								}
+							}
+
+							if (num_nlist>6)
+							{
+								//principalComponentAnalysis(num_nlist, nlist, centroid, D, V);
+								// find the centroid
+								for (l = 0; l < DIM; l++)
+									vds[i1][j1][k1].centroid[l] = 0.0;
+								for (i = 0; i < num_nlist; i++)
+								{
+									id = nlist[i];
+									for (l = 0; l < DIM; l++)
+										vds[i1][j1][k1].centroid[l] += vert_v[id][l];
+								}
+								for (l = 0; l < DIM; l++)
+								{
+									vds[i1][j1][k1].centroid[l] /= num_nlist;
+									centroid[l] = vds[i1][j1][k1].centroid[l];
+								}
+
+								// ***principal component analysis ***
+								//first diagonal element
+								sum = 0;
+								for (j = 0; j < num_nlist; j++)
+								{
+									sum += (vert_v[nlist[j]][0] - centroid[0])*(vert_v[nlist[j]][0] - centroid[0]);
+								}
+
+								A[1][1] = sum / num_nlist;
+
+								sum = 0;
+								for (j = 0; j < num_nlist; j++)
+									sum += (vert_v[nlist[j]][0] - centroid[0])*(vert_v[nlist[j]][1] - centroid[1]);
+
+								A[1][2] = sum / num_nlist;
+								A[2][1] = A[1][2];
+
+
+								//second diagonal element
+								sum = 0;
+								for (j = 0; j < num_nlist; j++)
+									sum += (vert_v[nlist[j]][1] - centroid[1])*(vert_v[nlist[j]][1] - centroid[1]);
+
+								A[2][2] = sum / num_nlist;
+
+								sum = 0;
+								for (j = 0; j < num_nlist; j++)
+									sum += (vert_v[nlist[j]][0] - centroid[0])*(vert_v[nlist[j]][2] - centroid[2]);
+
+								A[1][3] = sum / num_nlist;
+								A[3][1] = A[1][3];
+
+								//third diagonal element
+								sum = 0;
+								for (j = 0; j < num_nlist; j++)
+									sum += (vert_v[nlist[j]][2] - centroid[2])*(vert_v[nlist[j]][2] - centroid[2]);
+
+								A[3][3] = sum / num_nlist;
+
+								sum = 0;
+								for (j = 0; j < num_nlist; j++)
+									sum += (vert_v[nlist[j]][1] - centroid[1])*(vert_v[nlist[j]][2] - centroid[2]);
+
+								A[2][3] = sum / num_nlist;
+								A[3][2] = A[2][3];
+
+
+								/* d[1..3] returns the eigenvalues of a. v[1..3][1..3] is
+								a matrix whose columns contain, on output, the normalized
+								eigenvectors of a.
+								*/
+								jacobi(A, 3, D, V3, &nrot);
+
+								/* output of eigenvalues in descending order */
+								eigsrt(D, V3, 3);
+
+								for (k = 0; k < DIM; k++)
+								for (l = 0; l < DIM; l++)
+									V[k][l] = V3[l + 1][k + 1];
+
+								dvector_cross_product(V[0], V[1], vtmp, 3, 0);
+								if (dvector_dot_product(vtmp, V[2], 3, 0) < 0.0)
+								{
+									dvector_assign(V[0], vtmp, 3);
+									dvector_assign(V[1], V[0], 3);
+									dvector_assign(vtmp, V[1], 3);
+								}
+
+
+								// ***least square fitting***
+								// determine local coordinate of neighboring points
+								calc_Cartesian_frame_to_frame_transformation_matrix(V[0], V[1], V[2],
+									centroid, E);
+
+								num_n = 0;
+								for (j = 0; j < num_nlist; j++)
+								{
+									id2 = nlist[j];			// global vertex id
+
+									for (k = 0; k < DIM; k++)
+									{
+										c[num_n][k] = 0.0;
+										for (l = 0; l < DIM; l++)
+											S[l] = vert_v[id2][l];
+										S[3] = 1.0;
+										for (l = 0; l < 4; l++)
+											c[num_n][k] += E[l][k] * S[l];
+									}
+									num_n++;
+								}
+
+
+								for (j = 0; j < num_nlist; j++)
+								{
+									x = c[j][0], y = c[j][1], z = c[j][2];
+
+									U[j + 1][1] = x*x, U[j + 1][2] = x*y, U[j + 1][3] = y*y;
+									U[j + 1][4] = x, U[j + 1][5] = y, U[j + 1][6] = 1.0;
+									B[j + 1] = z;
+								}
+
+								// SVD the square matrix U
+								svdcmp(U, num_nlist, 6, W, V2);
+								wmax = 0.0;              /// Will be the maximum sigular value obtained
+								for (j = 1; j <= 6; j++)
+								if (W[j] > wmax)   wmax = W[j];
+								// This is where we set the threshold for singular values allowed to be 
+								// nonzero. The constant is typical, but not universal. You have to 
+								// experiment with your own application
+								wmin = wmax*1.0e-6;
+								for (j = 1; j <= 6; j++)
+								if (W[j] < wmin)  W[j] = 0.0;
+								// Backsubstitute
+								svbksb(U, W, V2, num_nlist, 6, B, X);
+
+								// ***determine curvatures
+								// quadratic surface: z = a1*x^2 + a2*xy + a3*y^2 + a4 x + a5 y + a6
+								a[1] = X[1], a[2] = X[2], a[3] = X[3], a[4] = X[4], a[5] = X[5], a[6] = X[6];
+
+								sum_error = 0.0;
+								for (j = 0; j < num_nlist; j++)  // no center point c[0]
+								{
+
+									//v_surf[0]=c[j][0], v_surf[1]=c[j][1];
+									x = c[j][0], y = c[j][1];
+									v_surf[2] = a[1] * x*x + a[2] * x*y + a[3] * y*y + a[4] * x + a[5] * y + a[6];
+
+									tmp = v_surf[2] - c[j][2];
+									sum_error += fabs(tmp);
+								}
+								sum_error /= num_nlist;
+
+								vds[i1][j1][k1].maxError = sum_error;
+
+
+								if (count[i1][j1][k1] < 6)  // extend one ring
+								{
+									for (i = -len1; i <= len1; i++)
+									for (j = -len1; j <= len1; j++)
+									for (k = -len1; k <= len1; k++)
+									{
+										i2 = i1 + i, j2 = j1 + j, k2 = k1 + k;  // x1, y1, z1
+
+										if (i == 0 && j == 0 && k == 0)
+											continue;
+										if (i2<0 || j2 <0 || k2<0)
+											continue;
+										if (i2>cubelen - 1 || j2>cubelen - 1 || k2>cubelen - 1)
+											continue;
+
+										itmp = count[i2][j2][k2];
+										if (itmp > 0)
+											vds[i2][j2][k2].maxError = sum_error;
+
+									}
+								}
+							}
+
+						}
+					}
+				}
+			}
+
+			// Histogram
+			for (i = 0; i < m; i++)
+			{
+				for (j = 0; j<m; j++)
+				{
+					for (k = 0; k<m; k++)
+					{
+						if (count[i][j][k]>0)
+						{
+							if (vds[i][j][k].maxError> vmax) vmax = vds[i][j][k].maxError;
+							if (vds[i][j][k].maxError < vmin) vmin = vds[i][j][k].maxError;
+						}
+					}
+				}
+			}
+			vsize = vmax - vmin;
+
+			for (i = 0; i < m; i++)
+			{
+				for (j = 0; j < m; j++)
+				{
+					for (k = 0; k<m; k++)
+					{
+						if (count[i][j][k]>0)
+						{
+							j2 = int((vds[i][j][k].maxError - vmin)*float(HISTOGNUM - 1) / vsize);
+							if (j2 >= HISTOGNUM) j2 = HISTOGNUM - 1;
+							vds[i][j][k].hlevel = j2;
+						}
+					}
+				}
+			}
+
+
+			// reinitialization of arrays
+			for (i = 0; i < m; i++)
+			{
+				for (j = 0; j < m; j++)
+				{
+					for (k = 0; k < m; k++)
+					{
+						vds[i][j][k].connectivityFlag = UNTOUCHED;
+					}
+				}
+			}
+		}
 
 
 
+		// Propagation
+		int curvert2 = curvert;
+		char *nodeflag = new char[curvert2];
+		//		for (i = 0; i < curvert2; i++)
+		//			nodeflag[i] = UNPROCESSED;
+		i2 = 1;
+		//i2 = HISTOGNUM-1;
+		if (palgorithm == 1)
+		{
+			int count_untouched = 0;
+
+
+			int break_flag = false;
+
+			for (l = 0; l < i2; l++)
+			{
+				for (i = 0; i < m; i++)
+				{
+					for (j = 0; j < m; j++)
+					{
+						for (k = 0; k < m; k++)
+						{
+							if (vds[i][j][k].hlevel == l)  // cubes with no or very few points are set to have a level = HISTOGNUM
+							{
+								if (vds[i][j][k].connectivityFlag == -1) // untouched
+								{
+									propagateVoxel(i, j, k, vds, m);
+									itmp = count[i][j][k];
+									for (l = 0; l < itmp; l++)
+									{
+										id = list[i][j][k][l];
+									}
+									break_flag = true; // single initial point
+								}
+							}
+							if (break_flag) break;
+						}
+						if (break_flag) break;
+					}
+					if (break_flag) break;
+				}
+				if (break_flag) break;
+			}
+			cout << "propogation process count: ";
+			cout << process_count << endl;
+		}
+
+
+		else if (palgorithm == 2)
+		{
+			for (l = 0; l < i2; l++)
+			{
+				for (i = 0; i < m; i++)
+				{
+					for (j = 0; j < m; j++)
+					{
+						for (k = 0; k < m; k++)
+						{
+							if (vds[i][j][k].hlevel == l // cubes with no or very few points are set to have a level = HISTOGNUM
+								// && count[i][j][k]>10
+								)  // avoid starting from voxels with few points
+							{
+								if (vds[i][j][k].connectivityFlag == UNTOUCHED) // untouched
+								{
+									propagateVoxelQuadratic(i, j, k, vds, count, list, nodeflag, m, vert_v);
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+
+
+		if (palgorithm == 1)
+		{
+			for (i = 0; i < m; i++)
+			{
+				for (j = 0; j < m; j++)
+				{
+					for (k = 0; k < m; k++)
+					{
+						itmp = count[i][j][k];
+						if (vds[i][j][k].connectivityFlag == 3 \
+							|| vds[i][j][k].connectivityFlag == -1) // outlier
+						{
+							for (l = 0; l < itmp; l++)
+							{
+								id = list[i][j][k][l];
+								tmpoup2 << vert_v[id][0] << " " << vert_v[id][1] << " " << vert_v[id][2] << endl;
+							}
+						}
+
+						else  // true data + untouched
+						{
+							for (l = 0; l < itmp; l++)
+							{
+								id = list[i][j][k][l];
+								tmpoup1 << vert_v[id][0] << " " << vert_v[id][1] << " " << vert_v[id][2] << endl;
+							}
+						}
+					}
+				}
+			}
+
+		}
+
+		else if (palgorithm == 2)
+		{
+			for (i = 0; i < m; i++)
+			{
+				for (j = 0; j < m; j++)
+				{
+					for (k = 0; k < m; k++)
+					{
+						itmp = count[i][j][k];
+						if (vds[i][j][k].connectivityFlag == OUTLIERT \
+							|| vds[i][j][k].connectivityFlag == UNTOUCHED) // outlier
+						{
+							for (l = 0; l < itmp; l++)
+							{
+								id = list[i][j][k][l];
+								tmpoup2 << vert_v[id][0] << " " << vert_v[id][1] << " " << vert_v[id][2] << endl;
+							}
+						}
+
+						else  // true data
+						{
+							for (l = 0; l < itmp; l++)
+							{
+								id = list[i][j][k][l];
+								tmpoup1 << vert_v[id][0] << " " << vert_v[id][1] << " " << vert_v[id][2] << endl;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 	tmpoup1.close();
 	tmpoup2.close();
 	t_end = time(NULL);
 	cout << "run time:";
-	cout << t_end-t_start << endl;
+	cout << t_end - t_start << endl;
 
 	// deallocation
+	delete[]vtmp;
+	delete[] GmaxerrorArray;
+	delete EigenFactor;
+	delete[] istatus;
+	//	delete [] icount;
+
+
 	for (i = 0; i<m; i++)
 	{
 
 		for (j = 0; j < m; j++)
 		{
-			
+
 			for (k = 0; k<m; k++)
 			{
 				delete[] list[i][j][k];
 			}
-			delete [] count[i][j];
-			delete [] vds[i][j];
-			delete [] list[i][j];
+			delete[] count[i][j];
+			delete[] vds[i][j];
+			delete[] list[i][j];
 		}
-		delete [] count[i];
-		delete [] vds[i];
+		delete[] count[i];
+		delete[] vds[i];
 		delete[] list[i];
 	}
-	delete [] count;
-	delete [] vds;
-	delete [] list;
+	delete[] count;
+	delete[] vds;
+	delete[] list;
 	system("pause");
 	return 0;
 }
@@ -668,7 +1272,7 @@ void calcEigenFactor(int num_nlist, INT32 *nlist, REAL_DIM* vert_v, REAL* EigenF
 {
 	int j, k, l, id2, nrot;
 	REAL_DIM centroid, vtmp;
-	float* vtmp2 = new float;
+	float* vtmp2 = new float[3];
 
 	// determine local coordinate of neighboring points
 	REAL sum;
@@ -775,10 +1379,130 @@ void calcEigenFactor(int num_nlist, INT32 *nlist, REAL_DIM* vert_v, REAL* EigenF
 	}
 	error /= num_nlist;
 	float ratio = 0.5;
-	*EigenFactor = ratio*fabs(vtmp2[2] / vtmp2[0]) + (1-ratio)*(error/max_error);
+	*EigenFactor = ratio*fabs(vtmp2[2] / vtmp2[0]) + (1 - ratio)*(error / max_error);
+	delete[] vtmp2;
 }
 
+void tellTrueFalse(int num_nlist, INT32 *nlist, REAL_DIM* vert_v, bool* istatus)
+{
+	int j, k, l, id2, nrot;
+	REAL_DIM centroid, vtmp;
+	float* vtmp2 = new float[3];
 
+	// determine local coordinate of neighboring points
+	REAL sum;
+
+	// determine centroid
+	for (k = 0; k<DIM; k++) centroid[k] = 0.0;
+	for (j = 0; j<num_nlist; j++)
+	for (k = 0; k<DIM; k++)
+		centroid[k] += vert_v[nlist[j]][k];
+	for (k = 0; k<DIM; k++) centroid[k] /= float(num_nlist);
+
+	//begin build covariance matrix
+	//first diagonal element
+	sum = 0;
+	for (j = 0; j<num_nlist; j++)
+	{
+		//sum+=(vert[nlist[j]]._v[0]-centroid[0])*(vert[nlist[j]]._v[0]-centroid[0]);
+		sum += (vert_v[nlist[j]][0] - centroid[0])*(vert_v[nlist[j]][0] - centroid[0]);
+	}
+
+
+	A[1][1] = sum / num_nlist;
+
+	sum = 0;
+	for (j = 0; j<num_nlist; j++)
+		//sum+=(vert[nlist[j]]._v[0]-centroid[0])*(vert[nlist[j]]._v[1]-centroid[1]);
+		sum += (vert_v[nlist[j]][0] - centroid[0])*(vert_v[nlist[j]][1] - centroid[1]);
+
+	A[1][2] = sum / num_nlist;
+	A[2][1] = A[1][2];
+
+
+	//second diagonal element
+	sum = 0;
+	for (j = 0; j<num_nlist; j++)
+		//sum+=(vert[nlist[j]]._v[1]-centroid[1])*(vert[nlist[j]]._v[1]-centroid[1]);
+		sum += (vert_v[nlist[j]][1] - centroid[1])*(vert_v[nlist[j]][1] - centroid[1]);
+
+	A[2][2] = sum / num_nlist;
+
+	sum = 0;
+	for (j = 0; j<num_nlist; j++)
+		//sum+=(vert[nlist[j]]._v[0]-centroid[0])*(vert[nlist[j]]._v[2]-centroid[2]);
+		sum += (vert_v[nlist[j]][0] - centroid[0])*(vert_v[nlist[j]][2] - centroid[2]);
+
+	A[1][3] = sum / num_nlist;
+	A[3][1] = A[1][3];
+
+	//third diagonal element
+	sum = 0;
+	for (j = 0; j<num_nlist; j++)
+		//sum+=(vert[nlist[j]]._v[2]-centroid[2])*(vert[nlist[j]]._v[2]-centroid[2]);
+		sum += (vert_v[nlist[j]][2] - centroid[2])*(vert_v[nlist[j]][2] - centroid[2]);
+
+	A[3][3] = sum / num_nlist;
+
+	sum = 0;
+	for (j = 0; j<num_nlist; j++)
+		//sum+=(vert[nlist[j]]._v[1]-centroid[1])*(vert[nlist[j]]._v[2]-centroid[2]);
+		sum += (vert_v[nlist[j]][1] - centroid[1])*(vert_v[nlist[j]][2] - centroid[2]);
+
+	A[2][3] = sum / num_nlist;
+	A[3][2] = A[2][3];
+
+	/* d[1..3] returns the eigenvalues of a. v[1..3][1..3] is
+	a matrix whose columns contain, on output, the normalized
+	eigenvectors of a.
+	*/
+
+
+	jacobi(A, 3, D, V3, &nrot);
+
+
+
+	/* output of eigenvalues in descending order */
+	eigsrt(D, V3, 3);
+
+	for (j = 0; j<DIM; j++)
+	{
+		vtmp2[j] = D[j + 1];
+	}
+
+	// tell true or false
+	REAL* distance_array = new REAL[num_nlist];
+	REAL DD = -(V3[3][1] * centroid[0] + V3[3][2] * centroid[1] + V3[3][3] * centroid[2]);
+	REAL rootsquare_ABC = sqrt(V3[3][1] * V3[3][1] + V3[3][2] * V3[3][2] + V3[3][3] * V3[3][3]);
+	double vmax = -BIG, vmin = BIG, va = 0.0;
+	int ihistogram = 9999;
+	int numOfHis = 10000;
+	int i_bin;
+
+	for (j = 0; j < num_nlist; j++)
+	{
+		distance_array[j] = abs(V3[3][1] * vert_v[nlist[j]][0] + V3[3][2] * vert_v[nlist[j]][1] + V3[3][3] * vert_v[nlist[j]][2] + DD) / rootsquare_ABC;
+		if (distance_array[j]> vmax) vmax = distance_array[j];
+		if (distance_array[j]< vmin) vmin = distance_array[j];
+	}
+
+	double VRatio = (vmax - vmin == 0) ? 0 : float(numOfHis - 1) / (vmax - vmin);
+	for (j = 0; j < num_nlist; j++)
+	{
+		i_bin = int((distance_array[j] - vmin)*VRatio);
+
+		if (i_bin >= ihistogram)
+		{
+			istatus[nlist[j]] = false;
+		}
+		else
+		{
+			istatus[nlist[j]] = true;
+		}
+	}
+	delete[] vtmp2;
+	delete[] distance_array;
+}
 
 void calcEigenVector(int num_nlist, INT32 *nlist, REAL_DIM vtmp2, REAL_DIM* vert_v)
 {
@@ -1071,7 +1795,7 @@ void calcPointNoise(int num_nlist, INT32 *nlist, REAL_DIM vtmp2, REAL noise[], R
 	a matrix whose columns contain, on output, the normalized
 	eigenvectors of a.
 	*/
-	
+
 	jacobi(A, 3, D, V3, &nrot);
 
 	/* output of eigenvalues in descending order */
@@ -1138,7 +1862,7 @@ void calcPointNoise(int num_nlist, INT32 *nlist, REAL_DIM vtmp2, REAL noise[], R
 	REAL a[7];
 
 
-		//Error *w3 = new Error[num_nlist];
+	//Error *w3 = new Error[num_nlist];
 
 	m = num_nlist;
 	for (j = 0; j<m; j++)
@@ -1748,4 +2472,474 @@ REAL NormalizeEigenValue(REAL_DIM vtmp2)
 
 	//return (vtmp2[2]) / (vtmp2[0] * vtmp2[1]);
 
+}
+
+// circular propagation for noised data
+void propagateVoxelQuadratic(int i0, int j0, int k0, VoxelDataStruc ***vds,
+	int  ***count, int ****list, char *nodeflag, int cubelen, REAL_DIM* vert_v)
+{
+	INT16 num_nlist = 0, num_nlist2 = 0;
+	int i, j, nr = SearchBaseRadius, id2, m;   // for noised model: nr=30; for non-noised model: nr=15
+	int nR = 4 * nr, nr2, nR2, nrot;
+	int num_s1, num_s2, s1[100], s2[100], id, k, l;
+	//int dim=FRONT_SIZE;
+	int dim = curvert / 4;
+	CoordDataStruc *wave_front = new CoordDataStruc[dim];
+	CoordDataStruc *wave_front2 = new CoordDataStruc[dim];
+	int num_wave_front = 0, num_wave_front2 = 0;
+	//bool *flag=new bool[curvert];
+	REAL size = 1.0, tmp, angle_t = 0.35*M_PI;	  // 45 degree
+	REAL angle_t2 = 0.65*M_PI;
+	bool flag2 = false;
+	CoordDataStruc nid;
+	nid.i = i0, nid.j = j0, nid.k = k0;
+	int i1, j1, k1, i2, j2, k2;
+	float A3, B3, C3, D3, dist, scale = 1.3;
+	REAL_DIM v1, v2, centroid;
+
+	const int LEN = 2, LEN3 = 2000;
+	int itmp, itmp2;
+	REAL x, y, z, wmax, wmin;
+	// determine curvatures
+	REAL a[7], w, da, dt, *d = new REAL[LEN3];
+	REAL_DIM w1, v_surf, w2, vtmp;
+	REAL error = 0.0, max_error = 0.0, tmp3, tmp2, tmp_max_error, sum;
+
+	int *nlist = new int[LEN3];
+	int *nlist2 = new int[LEN3];
+	//char *nodeflag = new char[curvert];
+
+	REAL_DIM *c = new REAL_DIM[LEN3];
+	REAL_DIM *c2 = new REAL_DIM[1];
+	INT16 num_n, ht = 10;
+	REAL error_t = 0.002;
+
+	REAL *W = dvector(1, 6);
+	REAL *X = dvector(1, 6);
+	REAL **V2 = dmatrix(1, 6, 1, 6);
+	REAL **A = dmatrix(1, 3, 1, 3);
+	REAL *D = dvector(1, 3);
+	REAL **V3 = dmatrix(1, 3, 1, 3);
+
+	REAL **U = dmatrix(1, LEN3 + 1, 1, 6);
+	REAL *B = dvector(1, LEN3 + 1);
+	REAL_DIM *C2 = new REAL_DIM[LEN3 + 1];
+
+	REAL_DIM V[3];
+	REAL E[4][4], S[4], F[4][4];
+
+
+
+
+
+	num_wave_front = 1;
+	wave_front[0] = nid;
+
+	bool extendFlag = false;
+	int len1 = 1, len2 = 2, ii;
+	do
+	{
+		num_wave_front2 = 0;
+		for (m = 0; m<num_wave_front; m++)
+		{
+
+			i1 = wave_front[m].i, j1 = wave_front[m].j, k1 = wave_front[m].k; // x0, y0, z0
+			//if( (Gstatus_c[id]==UNPROCESSED && Gindex_c[id]<=false) )
+			//if (vds[i1][j1][k1].connectivityFlag <= UNPROCESSED    && //) // untouched or unprocessed
+			//vds[i1][j1][k1].hlevel <= ht  && vds[i1][j1][k1].maxError <= error_t)
+			if (vds[i1][j1][k1].connectivityFlag == UNTOUCHED
+				|| vds[i1][j1][k1].connectivityFlag == UNPROCESSED)
+			{
+				num_nlist = count[i1][j1][k1];
+				if (num_nlist == 0)
+				{
+					vds[i1][j1][k1].connectivityFlag = OUTLIERT; // outlier
+					continue;
+				}
+
+				vds[i1][j1][k1].connectivityFlag = TRUEDATA; // true data
+
+				extendFlag = false;
+				if (num_nlist< 6)  // extend one ring
+				{
+					extendFlag = true;
+
+					for (i = -len1; i <= len1; i++)
+					for (j = -len1; j <= len1; j++)
+					for (k = -len1; k <= len1; k++)
+					{
+						i2 = i1 + i, j2 = j1 + j, k2 = k1 + k;  // x1, y1, z1
+
+						if (i == 0 && j == 0 && k == 0)
+							continue;
+						if (i2<0 || j2 <0 || k2<0)
+							continue;
+						if (i2>cubelen - 1 || j2>cubelen - 1 || k2>cubelen - 1)
+							continue;
+
+						itmp = count[i2][j2][k2];
+						num_nlist += itmp;
+
+
+					}
+				}
+
+				if (num_nlist>6)
+				{
+					max_error = vds[i1][j1][k1].maxError; // get max_error
+
+					// loop over one-ring neighbors
+					num_nlist2 = 0;
+					if (extendFlag == false)
+					{
+						for (i = -len1; i <= len1; i++)
+						{
+							for (j = -len1; j <= len1; j++)
+							{
+								for (k = -len1; k <= len1; k++)
+								{
+									i2 = i1 + i, j2 = j1 + j, k2 = k1 + k;  // x1, y1, z1
+
+									if (i == 0 && j == 0 && k == 0)
+										continue;
+									if (i2<0 || j2 <0 || k2<0)
+										continue;
+									if (i2>cubelen - 1 || j2>cubelen - 1 || k2>cubelen - 1)
+										continue;
+
+									if (vds[i2][j2][k2].count == 0)
+									{
+										vds[i2][j2][k2].connectivityFlag = OUTLIERT;
+										continue;
+									}
+
+									tmp = vds[i2][j2][k2].maxError;
+									tmp2 = fabs(tmp);
+									if (tmp2 < 2 * max_error)
+									{
+										if (vds[i2][j2][k2].connectivityFlag == UNTOUCHED)  // untouched
+										{
+											nid.i = i2, nid.j = j2, nid.k = k2;
+											wave_front2[num_wave_front2++] = nid;
+											vds[i2][j2][k2].connectivityFlag = UNPROCESSED;  // unprocessed
+										}
+										else if (vds[i2][j2][k2].connectivityFlag == UNPROCESSED) // set in former loop
+										{
+											// do nothing
+										}
+										else if (vds[i2][j2][k2].connectivityFlag == TRUEDATA)
+										{
+											// do nothing
+										}
+										else // treated as noise before
+											vds[i2][j2][k2].connectivityFlag = TRUEDATA; // true data
+
+									}
+									else
+									{
+										if (vds[i2][j2][k2].connectivityFlag == UNTOUCHED)
+										{
+											vds[i2][j2][k2].connectivityFlag = OUTLIERT; // outlier
+										}
+									}
+
+
+								}
+							}
+						}
+					}
+					else  // two-ring extension
+					{
+						for (i = -len2; i <= len2; i++)
+						{
+							for (j = -len2; j <= len2; j++)
+							{
+								for (k = -len2; k <= len2; k++)
+								{
+									i2 = i1 + i, j2 = j1 + j, k2 = k1 + k;  // x1, y1, z1
+
+									if (i == len2 || i == -len2 || j == len2 || j == -len2 || k == len2 || k == -len2)
+									{
+										if (i2<0 || j2 <0 || k2<0)
+											continue;
+										if (i2>cubelen - 1 || j2>cubelen - 1 || k2>cubelen - 1)
+											continue;
+
+										tmp = vds[i2][j2][k2].maxError;
+										tmp2 = fabs(tmp);
+										if (tmp2 < 1.5 * max_error)
+										{
+											if (vds[i2][j2][k2].connectivityFlag == UNTOUCHED)  // untouched
+											{
+												nid.i = i2, nid.j = j2, nid.k = k2;
+												wave_front2[num_wave_front2++] = nid;
+												vds[i2][j2][k2].connectivityFlag = UNPROCESSED;  // unprocessed
+											}
+											else if (vds[i2][j2][k2].connectivityFlag == UNPROCESSED) // set in former loop
+											{
+												// do nothing
+											}
+											else if (vds[i2][j2][k2].connectivityFlag == TRUEDATA)
+											{
+												// do nothing
+											}
+											else // treated as noise before
+												vds[i2][j2][k2].connectivityFlag = TRUEDATA; // true data
+
+										}
+										else
+										{
+											if (vds[i2][j2][k2].connectivityFlag == UNTOUCHED)
+											{
+												vds[i2][j2][k2].connectivityFlag = OUTLIERT; // outlier
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+
+				}  // end of num_list < 8
+			}
+		}  // end of for(m=0; m<num_wave_front; m++)
+
+
+		if (num_wave_front2 == 0)
+			break;
+
+		num_wave_front = num_wave_front2;
+		for (i = 0; i<num_wave_front; i++)
+			wave_front[i] = wave_front2[i];
+
+	} while (num_wave_front > 0);   // end of do
+
+
+	delete[]wave_front;
+	delete[]wave_front2;
+	delete[]d;
+	delete[]nlist;
+	delete[]nlist2;
+	//delete []nodeflag;
+	delete[]c;
+	delete[]c2;
+
+	free_dvector(W, 1, 6);
+	free_dvector(X, 1, 6);
+	free_dmatrix(V2, 1, 6, 1, 6);
+	free_dmatrix(A, 1, 3, 1, 3);
+	free_dvector(D, 1, 3);
+	free_dmatrix(V3, 1, 3, 1, 3);
+
+	free_dmatrix(U, 1, LEN3 + 1, 1, 6);
+	free_dvector(B, 1, LEN3 + 1);
+	delete[]C2;
+
+}
+
+
+
+// circular propagation for noised data
+void propagateVoxel(int i0, int j0, int k0, VoxelDataStruc ***vds, int cubelen)
+{
+	INT16 num_nlist = 0, num_nlist2 = 0;
+	int i, j, nr = 30, id2, m;   // for noised model: nr=30; for non-noised model: nr=15
+	int nR = 4 * nr, nr2, nR2;
+	int num_s1, num_s2, s1[100], s2[100], id, k;
+	//int dim=FRONT_SIZE;
+	int dim = curvert / 4;
+	CoordDataStruc *wave_front = new CoordDataStruc[dim];
+	CoordDataStruc *wave_front2 = new CoordDataStruc[dim];
+	int num_wave_front = 0, num_wave_front2 = 0;
+	//bool *flag=new bool[curvert];
+	REAL size = 1.0;
+	bool flag2 = false;
+	CoordDataStruc nid;
+	nid.i = i0, nid.j = j0, nid.k = k0;
+	int i1, j1, k1, i2, j2, k2, l;
+	float A, B, C, D, d;
+	float scale = 0.5*min_cubesize; // best for this case
+	float tmp, angle_t = 0.01*M_PI; // 9 degree, best for this case
+	//REAL angle_t2 = 0.75*M_PI;
+	float dist_angl_ratio = 0.8;
+	float dist_angl;
+	//float dist_angl_threshold = 0.3;
+	float dist_angl_threshold = 0.3;
+
+	num_wave_front = 1;
+	wave_front[0] = nid;
+	REAL_DIM v1, v2;
+
+	do
+	{
+		num_wave_front2 = 0;
+		for (m = 0; m<num_wave_front; m++)
+		{
+
+			i1 = wave_front[m].i, j1 = wave_front[m].j, k1 = wave_front[m].k; // x0, y0, z0
+			//if( (Gstatus_c[id]==UNPROCESSED && Gindex_c[id]<=false) )
+			if (vds[i1][j1][k1].connectivityFlag <= 0) // untouched or unprocessed
+			{
+				vds[i1][j1][k1].connectivityFlag = 2; // true data
+
+				// construct the plane equation
+				// centroid is shifted to the lower left corner
+
+				// distance-based
+				A = vds[i1][j1][k1].n[0], B = vds[i1][j1][k1].n[1], C = vds[i1][j1][k1].n[2];
+				D = -(A*vds[i1][j1][k1].centroid[0] + B*vds[i1][j1][k1].centroid[1] + C*vds[i1][j1][k1].centroid[2]);
+				for (l = 0; l<DIM; l++)
+					v1[l] = vds[i1][j1][k1].n[l];
+
+				for (i = -1; i <= 1; i++)
+				for (j = -1; j <= 1; j++)
+				for (k = -1; k <= 1; k++)
+				{
+
+					i2 = i1 + i, j2 = j1 + j, k2 = k1 + k;  // x1, y1, z1
+
+					if (i == 0 && j == 0 && k == 0)
+						continue;
+					if (i2<0 || j2 <0 || k2<0)
+						continue;
+					if (i2>cubelen - 1 || j2>cubelen - 1 || k2>cubelen - 1)
+						continue;
+					//					if (abs(i) + abs(j) + abs(k) != 1)
+					//						continue;
+
+					// no difference
+
+					if (vds[i2][j2][k2].count == 0)
+					{
+						vds[i2][j2][k2].connectivityFlag = 3; // outlier
+						continue;
+					}
+
+
+					// distance-based
+					// distance from (x1, y1, z1) to the plane (A,B,C,D)
+					d = fabs(A*vds[i2][j2][k2].centroid[0] + B*vds[i2][j2][k2].centroid[1] + C*vds[i2][j2][k2].centroid[2] + D) / sqrt(A*A + B*B + C*C);
+
+					//					for (int l = 0; l<DIM; l++)
+					//						v2[l] = vds[i2][j2][k2].centroid[l] - vds[i1][j1][k1].centroid[l];
+					for (l = 0; l<DIM; l++)
+						v2[l] = vds[i2][j2][k2].n[l];
+
+
+					// anlge-based
+					tmp = angle_vect(v1, v2);
+
+
+
+					// linear combination of distance and angle
+					//dist_angl = (1 - dist_angl_ratio)*(tmp - angle_t) / (M_PI / 2) + \
+																//dist_angl_ratio*(d - scale) / min_cubesize;
+					dist_angl = -(1 - dist_angl_ratio)*(tmp - angle_t) / (M_PI / 2) + \
+						dist_angl_ratio*(d - scale) / min_cubesize;
+
+					//if (d < scale) // in the propagation plane
+					//if (tmp < angle_t)
+					//if ((tmp < angle_t) || d < scale)
+					if (dist_angl < dist_angl_threshold)
+						// The purpose of the second condition is to get rid of cubes with no or very few points
+					{
+						if (vds[i2][j2][k2].connectivityFlag == -1)  // untouched
+						{
+							nid.i = i2, nid.j = j2, nid.k = k2;
+							wave_front2[num_wave_front2++] = nid;
+							vds[i2][j2][k2].connectivityFlag = 0;  // unprocessed
+						}
+						else if (vds[i2][j2][k2].connectivityFlag == 0) // set in former loop
+						{
+							// do nothing
+						}
+						else if (vds[i2][j2][k2].connectivityFlag == 2)
+						{
+							// do nothing
+						}
+						else // treated as noise before
+						{
+							//nid.i = i2, nid.j = j2, nid.k = k2;
+							//wave_front2[num_wave_front2++] = nid;
+							//vds[i2][j2][k2].connectivityFlag = 0;  // unprocessed
+							vds[i2][j2][k2].connectivityFlag = 2; // true data
+
+						}
+
+					}
+					else // outside the propagation plane
+					{
+						if (vds[i2][j2][k2].connectivityFlag == -1)
+						{
+							vds[i2][j2][k2].connectivityFlag = 3; // outlier
+						}
+					}
+				}
+
+			}
+		}  // end of for(m=0; m<num_wave_front; m++)
+
+
+		if (num_wave_front2 == 0)
+			break;
+
+		num_wave_front = num_wave_front2;
+		for (i = 0; i<num_wave_front; i++)
+			wave_front[i] = wave_front2[i];
+
+	} while (num_wave_front > 0);   // end of do
+
+
+	delete[]wave_front;
+	delete[]wave_front2;
+
+}
+
+// determine centroid
+void calcCentroid(int num_nlist, INT32 *nlist, REAL_DIM* vert_v, REAL centroid[])
+{
+	int j, k;
+	for (k = 0; k<DIM; k++) centroid[k] = 0.0;
+	for (j = 0; j<num_nlist; j++)
+	for (k = 0; k<DIM; k++)
+		centroid[k] += vert_v[nlist[j]][k];
+	for (k = 0; k<DIM; k++) centroid[k] /= float(num_nlist);
+}
+
+REAL angle_vect(REAL_DIM a, REAL_DIM b)
+{
+	int i;
+	REAL cp = 0;
+	REAL d1 = 0;
+	REAL d2 = 0;
+	REAL tol = 1.0e-6;
+
+	for (i = 0; i < DIM; i++)
+	{
+		cp += a[i] * b[i];
+		d1 += a[i] * a[i];
+		d2 += b[i] * b[i];
+	}
+
+	//if (d1 == 0 || d2 == 0) 
+	if (d1 <= tol || d2 <= tol)
+	{
+#ifdef _DEBUG
+		cerr << "d1= " << d1 << " d2= " << d2 << endl;
+		cerr << "Identical nodes !" << endl;
+#endif
+		cp = 0;
+	}
+	else
+	{
+		cp /= sqrt(d1*d2);
+		if (fabs(cp - 1.0) < tol)
+			cp = 0.0;
+		else if (fabs(cp + 1.0) < tol)
+			cp = M_PI;
+		else
+			cp = acos((cp));
+	}
+
+	return cp;
 }
