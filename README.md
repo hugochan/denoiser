@@ -4,6 +4,9 @@ Denoiser
 Code accompanying the paper [“Fast Voxel-based Surface Propagation Method for Outlier Removal”](http://www.cadconferences.com/CAD16_284-289.html#.WRR6E2WlJJ1)
 
 
+## Approach
+![approach](img/approach.png "approach")
+
 ## Experiment results
 
 ### Data models which have non-isolated and sharp featured surface outlier clusters
@@ -26,6 +29,5 @@ Yu Chen, Hao Chen and Jie Shen. **"Fast Voxel-based Surface Propagation Method f
       author={Yu Chen, Hao Chen and Jie Shen},
       booktitle ={CAD},
       year={2016},
-      volume={14},
       pages={284-289}
     }
